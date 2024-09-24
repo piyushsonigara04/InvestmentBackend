@@ -30,9 +30,13 @@ app.use(cors(corsOptions));
 
 const stockroutes = require("./Routes/StocksRoutes");
 const userroutes = require("./Routes/UserRoutes")
+const Yahooroute = require("./Routes/Yahoo");
+const sentimentroute = require("./Routes/sentimentRoutes")
 
 app.use("/api/v1/stocks", stockroutes);
 app.use("/api/v1/user",userroutes);
+app.use("/api/v1/yahoo",Yahooroute);
+app.use("/api/v1/sentiment",sentimentroute);
 // Connect to Cassandra
 const { dbConnect } = require("./Config/database");
 dbConnect();
