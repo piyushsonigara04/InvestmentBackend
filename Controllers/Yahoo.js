@@ -6,10 +6,12 @@ exports.Yahoo = async (req, res) => {
     try {
         const stockData = await yahooFinance.quoteSummary(`${symbol}.NS`, { modules: ['price'] });
 
+        console.log(stockData);
         if (stockData && stockData.price) {
             res.json({
                 symbol: stockData.price.symbol,
                 currentPrice: stockData.price.regularMarketPrice,
+                prevPrice : stockData.price.regularMarketPreviousClose,
                 currency: stockData.price.currency,
             });
         } else {

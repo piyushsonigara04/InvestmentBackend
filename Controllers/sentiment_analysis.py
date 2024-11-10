@@ -1,94 +1,60 @@
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import udf, col, lit
-from pyspark.sql.types import StringType, DoubleType
+from cassandra.cluster import Cluster
+from cassandra.query import SimpleStatement
+from uuid import uuid4
 import requests
-from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 import pandas as pd
-import json
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from datetime import datetime
-import sys
 
-# Initialize Spark session
-spark = SparkSession.builder \
-    .appName("News Sentiment Analysis") \
-    .config("spark.sql.shuffle.partitions", "8") \
-    .getOrCreate()
+# Initialize Cassandra connection
+cluster = Cluster(['127.0.0.1'], port=9042)  # Replace with your Cassandra node IPs
+session = cluster.connect('stock_trading')
 
-# Get stock symbol from command line arguments
-if len(sys.argv) < 2:
-    print(json.dumps({'error': 'Stock symbol is required'}))
-    spark.stop()
-    sys.exit(1)
-
-ST = sys.argv[1]  # Get the stock symbol from command line argument
+# 1. Data Collection (using a news API)
+ST='ONGC'
 api_key = '8851210072814d85be557116e9a5ad83'
-url = f'https://newsapi.org/v2/everything?q={ST}&sortBy=publishedAt&apiKey={api_key}'
+url = ('https://newsapi.org/v2/everything?'
+       f'q={ST}&'  # Replace 'AAPL' with your stock symbol
+       'sortBy=publishedAt&'
+       f'apiKey={api_key}')
 
-try:
-    # Fetch data from the API
-    response = requests.get(url)
+response = requests.get(url)
+news_data = response.json()
+
+# 2. Convert to DataFrame
+articles = news_data.get('articles', [])
+df = pd.DataFrame(articles)
+
+# 3. Text Preprocessing
+df['content'] = df['content'].fillna('')
+
+# 4. Sentiment Analysis using VADER
+analyzer = SentimentIntensityAnalyzer()
+df['sentiment'] = df['content'].apply(lambda x: analyzer.polarity_scores(x)['compound'])
+
+# 5. Store Articles in Cassandra
+for _, row in df.iterrows():
+    article_id = uuid4()
+    stock_symbol = f'{ST}'  # Replace with your stock symbol
+    published_date = datetime.strptime(row['publishedAt'], '%Y-%m-%dT%H:%M:%SZ')  # Convert to datetime object
+    title = row['title']
+    content = row['content']
+    author = row.get('author', 'Unknown')
+    url = row['url']
     
-    # Check if the API response was successful
-    response.raise_for_status()  # Raises an HTTPError for bad responses
-
-    news_data = response.json()
-
-    # Convert articles to a DataFrame using Pandas and then to Spark DataFrame
-    articles = news_data.get('articles', [])
-    df_pd = pd.DataFrame(articles)
-
-    # Create Spark DataFrame
-    df_spark = spark.createDataFrame(df_pd)
-
-    # Text preprocessing (fill null content)
-    df_spark = df_spark.fillna({'content': ''})
-
-    # Define a UDF for sentiment analysis using VADER
-    analyzer = SentimentIntensityAnalyzer()
+    # Insert into news_articles table
+    insert_article_query = """
+    INSERT INTO news_articles (stock_symbol, published_date, article_id, title, content, author, url)
+    VALUES (%s, %s, %s, %s, %s, %s, %s)
+    """
+    session.execute(insert_article_query, (stock_symbol, published_date, article_id, title, content, author, url))
     
-    def get_sentiment(content):
-        return analyzer.polarity_scores(content)['compound']
+    # Insert sentiment analysis result into sentiment_results table
+    sentiment_score = row['sentiment']
+    insert_sentiment_query = """
+    INSERT INTO sentiment_results (stock_symbol, published_date, article_id, sentiment_score)
+    VALUES (%s, %s, %s, %s)
+    """
+    session.execute(insert_sentiment_query, (stock_symbol, published_date, article_id, sentiment_score))
 
-    # Register the UDF
-    sentiment_udf = udf(get_sentiment, DoubleType())
-
-    # Apply the UDF to compute sentiment score
-    df_spark = df_spark.withColumn("sentiment", sentiment_udf(col("content")))
-
-    # Convert 'publishedAt' to timestamp type
-    df_spark = df_spark.withColumn("published_date", col("publishedAt").cast("timestamp"))
-
-    # Add stock symbol column to the DataFrame
-    df_spark = df_spark.withColumn("stock_symbol", lit(ST))
-
-    # Select relevant columns
-    df_spark = df_spark.select(
-        col("source.name").alias("source"),
-        col("title"),
-        col("author"),
-        col("content"),
-        col("url"),
-        col("published_date"),
-        col("sentiment"),
-        col("stock_symbol")
-    )
-
-    # Store the data in Spark SQL (In-Memory Table)
-    df_spark.createOrReplaceTempView("news_articles")
-
-    # Query to fetch the average sentiment score
-    avg_sentiment = spark.sql(f"""
-        SELECT AVG(sentiment) AS avg_sentiment
-        FROM news_articles 
-        WHERE stock_symbol = '{ST}'
-    """)
-    avg_sentiment_value = avg_sentiment.collect()[0]['avg_sentiment']
-
-    # Convert average sentiment to a JSON-compatible format
-    avg_sentiment_json = [{'avg_sentiment': avg_sentiment_value}]
-    print(json.dumps(avg_sentiment_json))
-
-except Exception as e:
-    print(f"An error occurred: {e}")
-finally:
-    spark.stop()  # Ensure Spark session stops in case of any error
+print("Data inserted into Cassandra successfully!")

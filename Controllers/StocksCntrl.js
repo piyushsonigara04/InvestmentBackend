@@ -66,20 +66,17 @@
 // }
 const cassandra = require('cassandra-driver');
 const client = new cassandra.Client({
-  contactPoints: ['localhost'], // Replace with your Cassandra contact points
-  localDataCenter: 'datacenter1', // Your data center
-  keyspace: 'stock_trading' // Your Cassandra keyspace
+  contactPoints: ['localhost'], 
+  localDataCenter: 'datacenter1', 
+  keyspace: 'stock_trading' 
 });
 
-// Function to add a stock to holdings
 exports.addHoldingStock = async (req, res) => {
   try {
     const { stock_symbol, buy_price, quantity, buy_date } = req.body;
-    const id = req.userId; // Assuming this is userId or holdingId
-
+    const id = req.userId; 
     console.log(stock_symbol, id);
 
-    // CQL query to insert the stock into holdings table
     const query = `INSERT INTO stocks (user_id, stock_symbol, buy_price, quantity, buy_date) 
                    VALUES (?, ?, ?, ?, ?)`;
 
@@ -99,7 +96,6 @@ exports.addHoldingStock = async (req, res) => {
   }
 };
 
-// Function to get all stocks in holdings
 exports.getHoldingStock = async (req, res) => {
   try {
     const id = req.userId;
@@ -122,14 +118,30 @@ exports.getHoldingStock = async (req, res) => {
   }
 };
 
+const jwt = require("jsonwebtoken");
+
 exports.deleteHolding = async (req, res) => {
   try {
     const { stock_symbol } = req.body;
-    const { id } = req.params; // Assuming id refers to the userId or holdingId
 
-    // CQL query to delete the stock from the holdings table
+    const token = req.cookies.token;
+
+    if (!token) {
+      return res.status(401).json({ message: "Authentication token is missing" });
+    }
+
+    const decoded = jwt.verify(token, 'piyush'); 
+    const id = decoded.userId;
+
+    console.log("Extracted userId from token:", id);
+
+    if (!id || !stock_symbol) {
+      return res.status(400).json({
+        message: "User ID or stock symbol is missing"
+      });
+    }
+
     const query = `DELETE FROM stocks WHERE user_id = ? AND stock_symbol = ?`;
-
     const params = [id, stock_symbol.toUpperCase()];
 
     await client.execute(query, params, { prepare: true });
@@ -139,20 +151,28 @@ exports.deleteHolding = async (req, res) => {
       message: `Stock with symbol ${stock_symbol} deleted from holdings`
     });
   } catch (error) {
-    res.status(400).json({
-      error: error.message,
-      message: "Failed to delete stock from holdings"
+    if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
+      return res.status(401).json({
+        status: "Error",
+        message: "Invalid or expired authentication token"
+      });
+    }
+
+    console.error("Error deleting stock:", error);
+
+    res.status(500).json({
+      status: "Error",
+      message: "Failed to delete stock from holdings",
+      error: error.message
     });
   }
 };
-
-// Function to sell a stock
+ 
 exports.sellStock = async (req, res) => {
   try {
     const { stock_symbol, sell_price, sell_date } = req.body;
-    const { id } = req.params; // Assuming user_id is the ID of the user
+    const { id } = req.params; 
 
-    // Fetch the stock details from holdings before selling
     const selectQuery = `SELECT * FROM stocks WHERE user_id = ? AND stock_symbol = ?`;
     const selectParams = [id, stock_symbol.toUpperCase()];
     const stock = await client.execute(selectQuery, selectParams, { prepare: true });
@@ -163,11 +183,9 @@ exports.sellStock = async (req, res) => {
 
     const { buy_price, quantity, buy_date } = stock.rows[0];
 
-    // CQL query to delete the stock from holdings after selling
     const deleteQuery = `DELETE FROM stocks WHERE user_id = ? AND stock_symbol = ?`;
     await client.execute(deleteQuery, selectParams, { prepare: true });
 
-    // CQL query to insert the stock into closed_positions after selling
     const insertQuery = `INSERT INTO closed_positions (user_id, stock_symbol, buy_date, sell_date, buy_price, quantity, sell_price) 
                          VALUES (?, ?, ?, ?, ?, ?, ?)`;
 
@@ -193,4 +211,52 @@ exports.sellStock = async (req, res) => {
     });
   }
 };
+
+exports.getInvestedValue = async (req, res) => {
+  try {
+    const id = req.userId;
+    const query = `SELECT SUM(buy_price * quantity) AS invested_value FROM stocks WHERE user_id = ?`;
+    const params = [id];
+    const result = await client.execute(query, params, { prepare: true });
+    
+    const investedValue = result.rows[0].invested_value || 0; // Ensure a fallback if no value found
+
+    res.status(200).json({
+      status: "Success",
+      message: "Invested value retrieved successfully",
+      data: investedValue
+    });
+  } catch (error) {
+    console.log(error);
+    res.status(400).json({
+      error: error.message,
+      message: "Failed to retrieve invested value"
+    });
+  }
+};
+
+exports.getClosedPositions = async (req, res) => {
+  try {
+    const id = req.userId;
+    const query = 'SELECT * FROM stocks WHERE user_id = ?';
+    const params = [id];
+    const result = await client.execute(query, params, { prepare: true });
+
+    console.log(result.rows);
+
+    res.status(200).json({
+      status: "Success",
+      message: "Holdings fetched",
+      data: result.rows
+    });
+  } catch (error) {
+    res.status(400).json({
+      error: error.message,
+      message: "Failed to fetch holdings"
+    });
+  }
+};
+
+
+
 

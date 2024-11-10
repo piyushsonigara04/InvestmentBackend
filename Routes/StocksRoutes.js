@@ -20,8 +20,9 @@ const verifyTokenFromCookie = require("../Middlewares/verifytoken");
 // Route to add stock to holdings
 router.post("/add",verifyTokenFromCookie.verifytoken, StocksCntrl.addHoldingStock);
 router.get("/getStock",verifyTokenFromCookie.verifytoken, StocksCntrl.getHoldingStock);
-router.post("/deleteStock/:id",StocksCntrl.deleteHolding);
-router.post("/sellStock/:id",StocksCntrl.sellStock)
+router.post("/deleteStock",StocksCntrl.deleteHolding);
+router.post("/sellStock/:id",StocksCntrl.sellStock);
+router.get("/getinvestedvalue",verifyTokenFromCookie.verifytoken,StocksCntrl.getInvestedValue);
 
 module.exports = router;
 
